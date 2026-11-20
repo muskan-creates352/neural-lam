@@ -1,9 +1,11 @@
 # Standard library
 import importlib.util
+import json
 import tempfile
 from pathlib import Path
 
 # Third-party
+import pytest
 import torch
 import yaml
 
@@ -201,3 +203,54 @@ def test_validate_graph_script_rejects_unsupported_graph_spec_version():
     assert not report.ok
     assert props.graph_format_spec_version == "9.9.9"
     assert any("unsupported spec version" in d for d in _details(report))
+
+
+@pytest.mark.parametrize(
+    "raw_yaml",
+    [
+        "- a\n- b\n",
+        "scalar_string",
+        "123",
+        "true",
+    ],
+)
+def test_validate_graph_script_rejects_non_mapping_metainfo(raw_yaml):
+    validator = _load_validator_module()
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        graph_dir_path = Path(tmpdir) / "graph" / "invalid_meta"
+        graph_dir_path.mkdir(parents=True)
+        (graph_dir_path / "metainfo.yaml").write_text(
+            raw_yaml, encoding="utf-8"
+        )
+
+        report, _, props = validator.validate_graph_directory(graph_dir_path)
+
+    assert report.has_fails()
+    assert not report.ok
+    assert props.graph_format_spec_version is None
+    assert any(
+        "missing or invalid 'spec_version' entry" in d for d in _details(report)
+    )
+
+
+def test_validate_graph_script_json_output_on_non_mapping_metainfo(capsys):
+    validator = _load_validator_module()
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        graph_dir_path = Path(tmpdir) / "graph" / "invalid_meta"
+        graph_dir_path.mkdir(parents=True)
+        (graph_dir_path / "metainfo.yaml").write_text(
+            "- item1\n- item2\n", encoding="utf-8"
+        )
+
+        ret = validator.cli(["--json", str(graph_dir_path)])
+        assert ret == 1
+
+        captured = capsys.readouterr()
+        data = json.loads(captured.out)
+        assert data["ok"] is False
+        assert any(
+            "missing or invalid 'spec_version' entry" in r["detail"]
+            for r in data["results"]
+        )
